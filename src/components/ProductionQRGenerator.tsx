@@ -41,11 +41,14 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
       ];
 
       // Try each service until one works
+      let qrCodeGenerated = false;
+      
       for (const serviceUrl of qrServices) {
         try {
           const response = await fetch(serviceUrl);
           if (response.ok) {
             setQrCode(serviceUrl);
+            qrCodeGenerated = true;
             break;
           }
         } catch (serviceError) {
@@ -54,8 +57,11 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
         }
       }
 
-      if (!qrCode) {
-        throw new Error('All QR code services failed');
+      if (!qrCodeGenerated) {
+        // Если все сервисы не сработали, используем последний URL в любом случае
+        // Это предотвратит ошибку и покажет хотя бы что-то
+        setQrCode(qrServices[qrServices.length - 1]);
+        console.warn('Using fallback QR service after all attempts failed');
       }
 
     } catch (error) {
@@ -64,7 +70,7 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
     } finally {
       setIsGenerating(false);
     }
-  }, [PRODUCTION_DOMAIN, qrCode, sessionId, setError, setIsGenerating, setQrUrl, setQrCode]);
+  }, [PRODUCTION_DOMAIN, sessionId, setError, setIsGenerating, setQrUrl, setQrCode]);
 
   useEffect(() => {
     if (sessionId) {
@@ -153,11 +159,11 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
           <div className="space-y-4">
             {/* QR Code Display */}
             <div className="relative mx-auto w-fit">
-              <div className="bg-white p-4 rounded-xl shadow-lg">
+              <div className="bg-white p-4 rounded-xl shadow-lg w-64 mx-auto">
                 <img 
                   src={qrCode} 
                   alt="Interactive Board Session QR Code" 
-                  className="w-64 h-64 mx-auto"
+                  className="w-full aspect-square object-contain"
                   onError={() => setError('Failed to load QR code image')}
                 />
               </div>

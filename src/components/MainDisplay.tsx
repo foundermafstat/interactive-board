@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Users, Wifi, WifiOff, Home } from 'lucide-react';
+import { Users, Wifi, WifiOff, Home, QrCode, Menu, X, Info } from 'lucide-react';
 import ProductionQRGenerator from './ProductionQRGenerator';
 import type { Socket } from 'socket.io-client';
 
 // Типы элементов
 interface BoardElement {
   id: string;
-  type: 'rect' | 'circle' | 'text' | 'line' | 'area';
+  type: string;
   x: number;
   y: number;
   width: number;
@@ -28,6 +28,20 @@ interface User {
   lastUpdate: number;
 }
 
+// Расширенный тип для пользователя с данными анимации
+interface EnhancedUser extends User {
+  // Текущие отображаемые координаты (для плавного движения)
+  currentX: number;
+  currentY: number;
+  // Целевые координаты (куда движется курсор)
+  targetX: number;
+  targetY: number;
+  // Флаг замедления (когда курсор в области)
+  isInArea: boolean;
+  // Скорость движения курсора
+  speed: number;
+}
+
 interface MainDisplayProps {
   sessionId: string | null;
   socket: Socket | null;
@@ -36,8 +50,16 @@ interface MainDisplayProps {
 const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [users, setUsers] = useState<User[]>([]);
+  // Модифицированный массив пользователей с данными анимации
+  const [enhancedUsers, setEnhancedUsers] = useState<EnhancedUser[]>([]);
   const [elements, setElements] = useState<BoardElement[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState<'qrcode' | 'players' | 'system'>('qrcode');
+  
+  // Константы для движения курсора
+  const CURSOR_BASE_SPEED = 0.1; // Базовая скорость движения
+  const CURSOR_SLOW_FACTOR = 0.4; // Коэффициент замедления в областях
 
   useEffect(() => {
     if (!socket || !sessionId) return;
@@ -106,6 +128,40 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
         
         return updated;
       });
+      
+      // Обновление enhancedUsers - здесь устанавливаем целевые координаты для плавного движения
+      setEnhancedUsers(prev => {
+        const userIndex = prev.findIndex(u => u.id === data.userId);
+        
+        if (userIndex >= 0) {
+          // Пользователь существует в массиве enhancedUsers
+          const updatedUsers = [...prev];
+          updatedUsers[userIndex] = {
+            ...updatedUsers[userIndex],
+            targetX: data.x,
+            targetY: data.y,
+            lastUpdate: Date.now()
+          };
+          return updatedUsers;
+        } else {
+          // Пользователь не найден - ищем его в обычном массиве users
+          const standardUser = users.find(u => u.id === data.userId);
+          if (standardUser) {
+            // Создаем нового enhanced пользователя
+            return [...prev, {
+              ...standardUser,
+              currentX: standardUser.x,
+              currentY: standardUser.y,
+              targetX: data.x,
+              targetY: data.y,
+              isInArea: false,
+              speed: CURSOR_BASE_SPEED,
+              lastUpdate: Date.now()
+            }];
+          }
+          return prev;
+        }
+      });
     });
 
     socket.on('connect', () => setIsConnected(true));
@@ -128,21 +184,85 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
 
   // Canvas rendering
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvasRef.current) return;
 
+    const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Handle resize
     const resize = () => {
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
+      if (canvas) {
+        canvas.width = canvas.clientWidth;
+        canvas.height = canvas.clientHeight;
+      }
     };
 
     resize();
     window.addEventListener('resize', resize);
 
+    // Функция для проверки, находится ли курсор внутри области (area)
+    const isInAreaElement = (x: number, y: number): boolean => {
+      // Проверяем все элементы типа 'area'
+      return elements.some(element => {
+        if (element.type !== 'area') return false;
+        
+        // Проверяем, находится ли точка в пределах области
+        return x >= element.x && x <= element.x + element.width &&
+               y >= element.y && y <= element.y + element.height;
+      });
+    };
+    
+    // Функция для обновления текущего положения курсоров с плавной анимацией
+    const updateCursorPositions = () => {
+      setEnhancedUsers(prevUsers => {
+        return prevUsers.map(user => {
+          // Прерываем обновление для пользователей типа display
+          if (user.userType === 'display') return user;
+          
+          // Проверяем, находится ли курсор в области (area)
+          const inArea = isInAreaElement(user.currentX, user.currentY);
+          
+          // Вычисляем скорость движения - замедляем, если курсор в области
+          const speed = inArea ? CURSOR_BASE_SPEED * CURSOR_SLOW_FACTOR : CURSOR_BASE_SPEED;
+          
+          // Вычисляем вектор движения к цели
+          const dx = user.targetX - user.currentX;
+          const dy = user.targetY - user.currentY;
+          
+          // Расстояние до цели
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          // Если курсор близко к цели - устанавливаем его точно в цель
+          if (distance < speed) {
+            return {
+              ...user,
+              currentX: user.targetX,
+              currentY: user.targetY,
+              isInArea: inArea
+            };
+          }
+          
+          // Иначе - двигаем курсор в направлении цели с заданной скоростью
+          const vx = (dx / distance) * speed;
+          const vy = (dy / distance) * speed;
+          
+          return {
+            ...user,
+            currentX: user.currentX + vx,
+            currentY: user.currentY + vy,
+            isInArea: inArea,
+            speed: speed
+          };
+        });
+      });
+    };
+
+    // Animation loop
     const animate = () => {
+      // Обновляем позиции курсоров
+      updateCursorPositions();
+      
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
       // Draw grid pattern
@@ -185,58 +305,80 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
           case 'circle':
             // Отрисовка круга
             ctx.beginPath();
-            ctx.arc(x + width / 2, y + height / 2, Math.min(width, height) / 2, 0, Math.PI * 2);
+            ctx.arc(x + width/2, y + height/2, Math.min(width, height)/2, 0, Math.PI * 2);
             ctx.fill();
-            ctx.stroke();
-            break;
-            
-          case 'line':
-            // Отрисовка линии
-            ctx.lineWidth = 6;
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(x + width, y + height);
-            ctx.strokeStyle = element.color;
-            ctx.lineWidth = 4;
             ctx.stroke();
             break;
             
           case 'area':
             // Отрисовка полупрозрачной области
-            ctx.globalAlpha = 0.4; // Задаем прозрачность
+            ctx.globalAlpha = 0.3; // Уменьшаем прозрачность
             ctx.fillRect(x, y, width, height);
-            
-            // Добавляем подсветку по краям области
-            ctx.strokeStyle = element.color.replace(/50$/, 'FF'); // Усиливаем опасити для края
-            ctx.lineWidth = 3;
+            ctx.globalAlpha = 0.6;
             ctx.strokeRect(x, y, width, height);
-            
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = element.color.replace(/50$/, 'FF');
-            ctx.strokeRect(x, y, width, height);
-            ctx.shadowBlur = 0; // Сбрасываем подсветку
-            ctx.globalAlpha = 1.0; // Возвращаем прозрачность
+            ctx.globalAlpha = 1.0; // Возвращаем обычную прозрачность
             break;
             
           case 'text':
-            // Отрисовка текста
-            ctx.fillStyle = 'white';
-            ctx.font = `${Math.max(16, height / 2)}px system-ui`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(element.text || '', x + width / 2, y + height / 2);
+            if (element.text) {
+              // Отрисовка текста
+              ctx.fillStyle = element.color;
+              ctx.font = '24px Arial';
+              ctx.fillText(element.text, x, y + 24);
+            }
+            break;
+            
+          default:
+            // Неизвестный тип элемента - просто отрисовываем прямоугольник
+            ctx.fillRect(x, y, width, height);
+            ctx.strokeRect(x, y, width, height);
             break;
         }
       });
-
-      // Draw user cursors
-      // Добавим журналирование всех пользователей в каждом кадре анимации
-      if (Math.random() < 0.01) { // Логируем только в 1% кадров, чтобы не перегружать консоль
-        console.log(`Отрисовка курсоров. Всего пользователей: ${users.length}`); 
-        users.forEach(user => {
-          console.log(`- ${user.username} (${user.id}): тип=${user.userType}, x=${user.x}, y=${user.y}, цвет=${user.color}`);
-        });
-      }
+      
+      // Отрисовка курсоров пользователей - используем enhancedUsers вместо users
+      enhancedUsers.forEach(user => {
+        // Пропускаем пользователей типа display
+        if (user.userType === 'display') return;
+        
+        // Используем текущие позиции для анимации
+        const x = (user.currentX / 1920) * canvas.width;
+        const y = (user.currentY / 1080) * canvas.height;
+        
+        // Индикатор замедления для курсоров в области
+        if (user.isInArea) {
+          ctx.beginPath();
+          ctx.arc(x, y, 20, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 0, 0.4)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        
+        // Shadow effect
+        ctx.beginPath();
+        ctx.arc(x, y + 2, 15, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.fill();
+        
+        // Cursor body
+        ctx.fillStyle = user.color;
+        ctx.beginPath();
+        ctx.arc(x, y, 12, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Cursor border
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        
+        // Username label
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(x - 40, y - 40, 80, 25);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 14px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText(user.username, x, y - 25);
+      });
       
       // Подсчитаем количество контроллеров для отладки
       const controllerCount = users.filter(u => u.userType !== 'display').length;
@@ -302,133 +444,227 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
-      {/* Header */}
-      <header className="bg-black/20 backdrop-blur-lg border-b border-white/10 p-4">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center space-x-4">
-            <button
-              onClick={goHome}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <Home className="w-5 h-5 text-white" />
-            </button>
-            <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-                <Users className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-white">Interactive Board</h1>
-                <p className="text-sm text-gray-300">Session: {sessionId?.slice(0, 8)}...</p>
-              </div>
-            </div>
-          </div>
+    <div className="flex flex-col h-screen w-full bg-gradient-to-br from-slate-900 to-slate-800 text-white overflow-hidden">
+      {/* Минималистичный хедер */}
+      <header className="border-b border-white/10 py-2 px-4 flex justify-between items-center">
+        <div className="flex items-center space-x-3">
+          <button 
+            onClick={goHome} 
+            className="bg-white/10 hover:bg-white/20 rounded-lg p-2 transition-colors"
+            title="Go Home"
+          >
+            <Home className="w-4 h-4" />
+          </button>
           
-          <div className="flex items-center space-x-6">
-            <div className="flex items-center space-x-2">
-              <Users className="w-5 h-5 text-blue-400" />
-              <span className="text-white font-medium">{users.length}</span>
-              <span className="text-gray-300 text-sm">users</span>
-            </div>
-            
-            <div className="flex items-center space-x-2">
-              {isConnected ? (
-                <>
-                  <Wifi className="w-5 h-5 text-green-400" />
-                  <span className="text-green-400 text-sm">Connected</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-5 h-5 text-red-400" />
-                  <span className="text-red-400 text-sm">Disconnected</span>
-                </>
-              )}
-            </div>
-          </div>
+          <h1 className="text-lg font-semibold">
+            Interactive Board
+            {sessionId && (
+              <span className="ml-2 text-xs font-normal text-blue-400">
+                #{sessionId.slice(0, 6)}
+              </span>
+            )}
+          </h1>
+        </div>
+        
+        <div className="flex items-center space-x-2">
+          <span className="text-xs text-gray-400 mr-1">
+            {isConnected ? 'Connected' : 'Disconnected'}
+          </span>
+          {isConnected ? 
+            <Wifi className="w-4 h-4 text-green-400" /> : 
+            <WifiOff className="w-4 h-4 text-red-400" />
+          }
+          
+          {/* Кнопка открытия меню */}
+          <button 
+            onClick={() => setShowMenu(true)}
+            className="bg-white/10 hover:bg-white/20 rounded-lg p-2 ml-2 transition-colors"
+            title="Open Menu"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
         </div>
       </header>
 
-      <div className="flex-1 flex">
-        {/* Main Canvas */}
-        <main className="flex-1 p-6">
-          <div className="h-full bg-black/20 backdrop-blur-lg rounded-2xl border border-white/10 overflow-hidden relative">
-            <canvas
-              ref={canvasRef}
-              className="w-full h-full"
-              style={{ minHeight: '500px' }}
-            />
-            
-            {users.length === 0 && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="text-center">
-                  <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                  <h3 className="text-xl font-semibold text-white mb-2">Waiting for users...</h3>
-                  <p className="text-gray-300">Have users scan the QR code to join</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </main>
-
-        {/* Sidebar */}
-        <aside className="w-96 p-6 space-y-6">
-          {/* Production QR Code Generator */}
-          {sessionId && (
-            <ProductionQRGenerator sessionId={sessionId} />
-          )}
-
-          {/* Connected Users */}
-          <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 border border-white/20">
-            <h3 className="text-lg font-semibold text-white mb-4">Connected Users</h3>
-            <div className="space-y-3 max-h-64 overflow-y-auto">
-              {users.filter(u => u.userType !== 'display').map(user => (
-                <div key={user.id} className="flex items-center space-x-3">
-                  <div 
-                    className="w-4 h-4 rounded-full"
-                    style={{ backgroundColor: user.color }}
-                  />
-                  <span className="text-white text-sm">{user.username}</span>
-                  <span className="text-gray-400 text-xs ml-auto">
-                    {user.userType}
-                  </span>
-                </div>
-              ))}
-              {users.filter(u => u.userType !== 'display').length === 0 && (
-                <p className="text-gray-400 text-sm text-center py-4">
-                  No controllers connected
+      {/* Основная часть - доска на весь экран */}
+      <main className="flex-1 p-2">
+        <div className="h-full bg-black/20 backdrop-blur-lg rounded-xl border border-white/10 overflow-hidden relative">
+          <canvas
+            ref={canvasRef}
+            className="w-full h-full"
+          />
+          
+          {users.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-xl font-semibold text-white mb-2">Waiting for users...</h3>
+                <p className="text-gray-300">
+                  Open menu <Menu className="w-4 h-4 inline" /> to scan QR code
                 </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Полупрозрачная панель-оверлей для затемнения доски */}
+      {showMenu && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-10" 
+          onClick={() => setShowMenu(false)}
+          aria-hidden="true"
+        />
+      )}
+      
+      {/* Выдвижное меню */}
+      <div 
+        className={`fixed top-0 right-0 h-full w-80 bg-slate-800/90 backdrop-blur-md border-l border-white/10 shadow-lg transform transition-transform duration-300 ease-in-out overflow-y-auto z-20 ${showMenu ? 'translate-x-0' : 'translate-x-full'}`}
+      >
+        <div className="p-3 flex justify-between items-center border-b border-white/10">
+          <h2 className="font-semibold text-lg">Menu</h2>
+          <button 
+            onClick={() => setShowMenu(false)}
+            className="bg-white/10 hover:bg-white/20 rounded-lg p-2 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Табы */}
+        <div className="border-b border-white/10">
+          <div className="flex">
+            <button
+              onClick={() => setActiveTab('qrcode')}
+              className={`flex items-center space-x-1 px-4 py-2 transition-colors ${activeTab === 'qrcode' ? 'border-b-2 border-blue-500 text-blue-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              <QrCode className="w-4 h-4" />
+              <span className="text-sm font-medium">QR Code</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('players')}
+              className={`flex items-center space-x-1 px-4 py-2 transition-colors ${activeTab === 'players' ? 'border-b-2 border-green-500 text-green-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              <Users className="w-4 h-4" />
+              <span className="text-sm font-medium">Players</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('system')}
+              className={`flex items-center space-x-1 px-4 py-2 transition-colors ${activeTab === 'system' ? 'border-b-2 border-purple-500 text-purple-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              <Info className="w-4 h-4" />
+              <span className="text-sm font-medium">Status</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 max-h-[calc(100vh-140px)] overflow-y-auto">
+          {/* QR Code Tab */}
+          {activeTab === 'qrcode' && (
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2 mb-1">
+                <QrCode className="w-5 h-5 text-blue-400" />
+                <h3 className="font-semibold">QR Code</h3>
+              </div>
+              
+              {sessionId && (
+                <ProductionQRGenerator sessionId={sessionId} />
               )}
             </div>
-          </div>
+          )}
 
-          {/* Connection Status */}
-          <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 border border-white/20">
-            <h3 className="text-lg font-semibold text-white mb-4">System Status</h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-300">WebSocket:</span>
-                <span className={isConnected ? 'text-green-400' : 'text-red-400'}>
-                  {isConnected ? 'Connected' : 'Disconnected'}
-                </span>
+          {/* Connected Players Tab */}
+          {activeTab === 'players' && (
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2 mb-3">
+                <Users className="w-5 h-5 text-green-400" />
+                <h3 className="font-semibold">Connected Players</h3>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-300">Session ID:</span>
-                <span className="text-blue-300 font-mono text-xs">
-                  {sessionId?.slice(0, 8)}...
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-300">Active Users:</span>
-                <span className="text-white">{users.filter(u => u.userType !== 'display').length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-300">Environment:</span>
-                <span className="text-green-400">Production</span>
+              
+              <div className="space-y-3">
+                <div className="flex justify-between text-xs text-gray-400 px-2">
+                  <span>Player</span>
+                  <span>Type</span>
+                </div>
+                
+                <div className="space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto bg-white/10 rounded-lg p-3">
+                  {users.filter(u => u.userType !== 'display').map(user => (
+                    <div key={user.id} className="flex items-center space-x-2 text-sm p-2 hover:bg-white/5 rounded-lg">
+                      <div 
+                        className="w-4 h-4 rounded-full"
+                        style={{ backgroundColor: user.color }}
+                      />
+                      <span className="text-white flex-1">{user.username}</span>
+                      <span className="text-gray-400 text-xs bg-white/10 px-2 py-1 rounded">{user.userType}</span>
+                    </div>
+                  ))}
+                  {users.filter(u => u.userType !== 'display').length === 0 && (
+                    <p className="text-gray-400 text-center py-8">
+                      No players connected yet.<br />
+                      <span className="text-xs block mt-2">Use the QR code to add players</span>
+                    </p>
+                  )}
+                </div>
+                
+                <div className="flex justify-between text-xs text-gray-400 mt-2 p-2 bg-blue-500/10 rounded-lg">
+                  <span>Total Players:</span>
+                  <span>{users.filter(u => u.userType !== 'display').length}</span>
+                </div>
               </div>
             </div>
-          </div>
-        </aside>
+          )}
+
+          {/* System Status Tab */}
+          {activeTab === 'system' && (
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2 mb-3">
+                <Info className="w-5 h-5 text-purple-400" />
+                <h3 className="font-semibold">System Status</h3>
+              </div>
+              
+              <div className="space-y-3 bg-white/10 rounded-lg p-4">
+                <div className="flex justify-between items-center p-2 border-b border-white/10 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-gray-300">WebSocket:</span>
+                  </div>
+                  <span className={`px-2 py-1 rounded-full text-xs ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                    {isConnected ? 'Connected' : 'Disconnected'}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between items-center p-2 border-b border-white/10 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-gray-300">Session ID:</span>
+                  </div>
+                  <span className="text-blue-300 font-mono text-xs bg-blue-500/10 px-2 py-1 rounded">
+                    {sessionId?.slice(0, 8)}...
+                  </span>
+                </div>
+                
+                <div className="flex justify-between items-center p-2 border-b border-white/10 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-gray-300">Active Users:</span>
+                  </div>
+                  <span className="text-white bg-white/10 px-2 py-1 rounded text-xs">
+                    {users.filter(u => u.userType !== 'display').length}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between items-center p-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-gray-300">Elements:</span>
+                  </div>
+                  <span className="text-white bg-white/10 px-2 py-1 rounded text-xs">
+                    {elements.length}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
+
+
     </div>
   );
 };
