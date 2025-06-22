@@ -8,13 +8,16 @@ export const useSocket = () => {
   useEffect(() => {
     // Determine the socket URL based on environment and origin
     const getSocketUrl = () => {
+      // Получаем URL из переменной окружения или используем текущий origin
+      const productionUrl = import.meta.env.VITE_PRODUCTION_URL;
+      
       // Проверяем, обращается ли пользователь через ngrok URL
-      if (window.location.href.includes('ngrok-free.app')) {
-        // Если да, то используем ngrok URL
-        return 'https://25a0-37-15-187-82.ngrok-free.app';
+      if (window.location.href.includes('ngrok-free.app') && productionUrl) {
+        console.log(`Используем VITE_PRODUCTION_URL для подключения: ${productionUrl}`);
+        return productionUrl;
       } else if (process.env.NODE_ENV === 'production') {
         // Стандартная логика для production среды
-        return window.location.origin.replace('https://', 'wss://').replace('http://', 'ws://');
+        return window.location.origin;
       } else {
         // Локальная разработка
         return 'http://localhost:3001';

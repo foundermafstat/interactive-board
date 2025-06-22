@@ -1,7 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Users, Wifi, WifiOff, Home, Download, ExternalLink } from 'lucide-react';
+import { Users, Wifi, WifiOff, Home } from 'lucide-react';
 import ProductionQRGenerator from './ProductionQRGenerator';
 import type { Socket } from 'socket.io-client';
+
+// Типы элементов
+interface BoardElement {
+  id: string;
+  type: 'rect' | 'circle' | 'text' | 'line' | 'area';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  text?: string;
+  createdBy: string;
+  createdAt: number;
+  updatedAt?: number;
+}
 
 interface User {
   id: string;
@@ -21,8 +36,8 @@ interface MainDisplayProps {
 const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [elements, setElements] = useState<BoardElement[]>([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionCount, setConnectionCount] = useState(0);
 
   useEffect(() => {
     if (!socket || !sessionId) return;
@@ -42,20 +57,55 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
 
     socket.on('user-joined', (user) => {
       setUsers(prev => [...prev, user]);
-      setConnectionCount(prev => prev + 1);
     });
 
     socket.on('user-left', (userId) => {
       setUsers(prev => prev.filter(u => u.id !== userId));
-      setConnectionCount(prev => Math.max(0, prev - 1));
+    });
+    
+    // Обработчики событий для элементов на доске
+    socket.on('session-joined', (data) => {
+      if (data.elements) {
+        setElements(data.elements);
+      }
+    });
+    
+    socket.on('element-created', (element) => {
+      setElements(prev => [...prev, element]);
+    });
+    
+    socket.on('element-updated', (updatedElement) => {
+      setElements(prev => prev.map(elem => 
+        elem.id === updatedElement.id ? updatedElement : elem
+      ));
+    });
+    
+    socket.on('element-deleted', (data) => {
+      setElements(prev => prev.filter(elem => elem.id !== data.id));
     });
 
     socket.on('cursor-updated', (data) => {
-      setUsers(prev => prev.map(user => 
-        user.id === data.userId 
-          ? { ...user, x: data.x, y: data.y, lastUpdate: Date.now() }
-          : user
-      ));
+      console.log(`Получено событие cursor-updated от пользователя ${data.userId}: x=${data.x}, y=${data.y}`);
+      
+      // Диагностика - проверка всех пользователей в сессии
+      console.log(`Текущие пользователи: ${users.map(u => `${u.username}(${u.id})`).join(', ')}`);
+      
+      // Стандартное обновление пользователей
+      setUsers(prev => {
+        const updated = prev.map(user => 
+          user.id === data.userId 
+            ? { ...user, x: data.x, y: data.y, lastUpdate: Date.now() }
+            : user
+        );
+        
+        // Проверка, был ли обновлен пользователь
+        const userUpdated = updated.some(u => u.id === data.userId);
+        if (!userUpdated) {
+          console.warn(`Пользователь с ID ${data.userId} не найден в списке пользователей`);
+        }
+        
+        return updated;
+      });
     });
 
     socket.on('connect', () => setIsConnected(true));
@@ -68,8 +118,13 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
       socket.off('cursor-updated');
       socket.off('connect');
       socket.off('disconnect');
+      
+      // Отключение обработчиков событий элементов
+      socket.off('element-created');
+      socket.off('element-updated');
+      socket.off('element-deleted');
     };
-  }, [socket, sessionId]);
+  }, [socket, sessionId, users]);
 
   // Canvas rendering
   useEffect(() => {
@@ -108,49 +163,136 @@ const MainDisplay: React.FC<MainDisplayProps> = ({ sessionId, socket }) => {
         ctx.lineTo(canvas.width, y);
         ctx.stroke();
       }
+      
+      // Отрисовка элементов на доске
+      elements.forEach(element => {
+        const x = (element.x / 1920) * canvas.width;
+        const y = (element.y / 1080) * canvas.height;
+        const width = (element.width / 1920) * canvas.width;
+        const height = (element.height / 1080) * canvas.height;
+        
+        ctx.fillStyle = element.color;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 2;
+        
+        switch (element.type) {
+          case 'rect':
+            // Отрисовка прямоугольника
+            ctx.fillRect(x, y, width, height);
+            ctx.strokeRect(x, y, width, height);
+            break;
+            
+          case 'circle':
+            // Отрисовка круга
+            ctx.beginPath();
+            ctx.arc(x + width / 2, y + height / 2, Math.min(width, height) / 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            break;
+            
+          case 'line':
+            // Отрисовка линии
+            ctx.lineWidth = 6;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + width, y + height);
+            ctx.strokeStyle = element.color;
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            break;
+            
+          case 'area':
+            // Отрисовка полупрозрачной области
+            ctx.globalAlpha = 0.4; // Задаем прозрачность
+            ctx.fillRect(x, y, width, height);
+            
+            // Добавляем подсветку по краям области
+            ctx.strokeStyle = element.color.replace(/50$/, 'FF'); // Усиливаем опасити для края
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, width, height);
+            
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = element.color.replace(/50$/, 'FF');
+            ctx.strokeRect(x, y, width, height);
+            ctx.shadowBlur = 0; // Сбрасываем подсветку
+            ctx.globalAlpha = 1.0; // Возвращаем прозрачность
+            break;
+            
+          case 'text':
+            // Отрисовка текста
+            ctx.fillStyle = 'white';
+            ctx.font = `${Math.max(16, height / 2)}px system-ui`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(element.text || '', x + width / 2, y + height / 2);
+            break;
+        }
+      });
 
       // Draw user cursors
+      // Добавим журналирование всех пользователей в каждом кадре анимации
+      if (Math.random() < 0.01) { // Логируем только в 1% кадров, чтобы не перегружать консоль
+        console.log(`Отрисовка курсоров. Всего пользователей: ${users.length}`); 
+        users.forEach(user => {
+          console.log(`- ${user.username} (${user.id}): тип=${user.userType}, x=${user.x}, y=${user.y}, цвет=${user.color}`);
+        });
+      }
+      
+      // Подсчитаем количество контроллеров для отладки
+      const controllerCount = users.filter(u => u.userType !== 'display').length;
+      if (controllerCount === 0 && Math.random() < 0.05) {
+        console.warn('Нет пользователей-контроллеров для отрисовки курсоров!');
+      }
+      
       users.forEach(user => {
         if (user.userType === 'display') return;
         
         const x = (user.x / 1920) * canvas.width;
         const y = (user.y / 1080) * canvas.height;
         
+        // Делаем курсор более заметным
+        
+        // Большое внешнее кольцо (для лучшей видимости)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.beginPath();
+        ctx.arc(x, y, 18, 0, Math.PI * 2);
+        ctx.fill();
+        
         // Cursor shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
         ctx.beginPath();
-        ctx.arc(x + 2, y + 2, 12, 0, Math.PI * 2);
+        ctx.arc(x + 2, y + 2, 15, 0, Math.PI * 2);
         ctx.fill();
         
-        // Cursor body
+        // Cursor body (увеличили размер)
         ctx.fillStyle = user.color;
         ctx.beginPath();
-        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.arc(x, y, 12, 0, Math.PI * 2);
         ctx.fill();
         
         // Cursor border
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 3;
         ctx.stroke();
         
-        // Username label
+        // Username label (увеличили размер)
         ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        ctx.fillRect(x - 30, y - 35, 60, 20);
+        ctx.fillRect(x - 40, y - 40, 80, 25);
         ctx.fillStyle = 'white';
-        ctx.font = '12px system-ui';
+        ctx.font = 'bold 14px system-ui';
         ctx.textAlign = 'center';
-        ctx.fillText(user.username, x, y - 22);
+        ctx.fillText(user.username, x, y - 25);
       });
       
       requestAnimationFrame(animate);
     };
 
     animate();
-
+    
     return () => {
       window.removeEventListener('resize', resize);
     };
-  }, [users]);
+  }, [elements, users]);
 
   const goHome = () => {
     if (socket) {

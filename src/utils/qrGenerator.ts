@@ -13,7 +13,9 @@ export interface QRCodeOptions {
 }
 
 export class ProductionQRGenerator {
-  private static readonly PRODUCTION_DOMAIN = 'https://25a0-37-15-187-82.ngrok-free.app';
+  // Используем VITE_PRODUCTION_URL из переменных окружения или фолбэк на значение по умолчанию
+  private static readonly PRODUCTION_DOMAIN = import.meta.env.VITE_PRODUCTION_URL || 
+    'https://25a0-37-15-187-82.ngrok-free.app';
   
   private static readonly QR_SERVICES = [
     {
@@ -168,6 +170,7 @@ export class ProductionQRGenerator {
       const urlObj = new URL(url);
       const sessionId = urlObj.searchParams.get('session');
       return sessionId && this.isValidSessionId(sessionId) ? sessionId : null;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       return null;
     }

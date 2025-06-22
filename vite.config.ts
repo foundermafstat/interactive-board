@@ -8,6 +8,13 @@ export default defineConfig({
     exclude: ['lucide-react'],
   },
   server: {
+    // Разрешаем подключения с ngrok хостов
+    allowedHosts: [
+      // Явно указываем конкретные домены ngrok
+      '25a0-37-15-187-82.ngrok-free.app',
+      '7d9c-37-15-187-82.ngrok-free.app',
+      'localhost',
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:3001',

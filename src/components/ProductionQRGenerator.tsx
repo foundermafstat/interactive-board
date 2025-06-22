@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Download, ExternalLink, Copy, RefreshCw, Check } from 'lucide-react';
 
 interface ProductionQRGeneratorProps {
@@ -16,10 +16,10 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
   const [error, setError] = useState<string>('');
   const [copied, setCopied] = useState(false);
 
-  // Production URL - replace with your actual deployed domain
-  const PRODUCTION_DOMAIN = 'https://25a0-37-15-187-82.ngrok-free.app';
+  // Используем VITE_PRODUCTION_URL из переменных окружения или фолбэк
+  const PRODUCTION_DOMAIN = import.meta.env.VITE_PRODUCTION_URL;
 
-  const generateProductionQRCode = async () => {
+  const generateProductionQRCode = useCallback(async () => {
     setIsGenerating(true);
     setError('');
 
@@ -64,13 +64,13 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
     } finally {
       setIsGenerating(false);
     }
-  };
+  }, [PRODUCTION_DOMAIN, qrCode, sessionId, setError, setIsGenerating, setQrUrl, setQrCode]);
 
   useEffect(() => {
     if (sessionId) {
       generateProductionQRCode();
     }
-  }, [sessionId]);
+  }, [sessionId, generateProductionQRCode]);
 
   const downloadQR = async () => {
     if (!qrCode) return;
@@ -211,7 +211,7 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
             </div>
 
             {/* Instructions */}
-            <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-lg p-4 border border-blue-500/20">
+            {/* <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-lg p-4 border border-blue-500/20">
               <h4 className="text-white font-semibold mb-2 text-sm">📋 Instructions:</h4>
               <ul className="text-gray-300 text-xs space-y-1 text-left">
                 <li>• Scan QR code with mobile device camera</li>
@@ -219,7 +219,7 @@ const ProductionQRGenerator: React.FC<ProductionQRGeneratorProps> = ({
                 <li>• Enable gyroscope permissions when prompted</li>
                 <li>• Tilt device to control cursor on main display</li>
               </ul>
-            </div>
+            </div> */}
           </div>
         ) : (
           <div className="w-64 h-64 mx-auto bg-gray-700/50 rounded-xl flex items-center justify-center border-2 border-dashed border-gray-600">
